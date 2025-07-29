@@ -1,3 +1,4 @@
+tensorflow
 streamlit
 pandas
 numpy

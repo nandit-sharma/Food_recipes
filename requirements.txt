@@ -4,5 +4,5 @@ numpy
 scikit-learn
 nltk
 Pillow
-tensorflow
-opencv-python
+opencv-python-headless
+tensorflow-cpu

@@ -9,7 +9,7 @@ import re
 import os
 from PIL import Image
 import io
-import tensorflow as tf
+# import tensorflow as tf
 from tensorflow.keras.applications import ResNet50
 from tensorflow.keras.applications.resnet50 import preprocess_input
 from tensorflow.keras.preprocessing.image import img_to_array, load_img

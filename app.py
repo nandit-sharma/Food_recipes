@@ -13,7 +13,7 @@ from PIL import Image
 import io
 
 # Set up logging
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Download stopwords
@@ -33,6 +33,10 @@ if 'search_results' not in st.session_state:
     st.session_state.search_results = None
 if 'search_scores' not in st.session_state:
     st.session_state.search_scores = None
+if 'liked_recipes' not in st.session_state:
+    st.session_state.liked_recipes = []
+if 'viewed_recipes' not in st.session_state:
+    st.session_state.viewed_recipes = []
 
 # List of minor ingredients to exclude
 MINOR_INGREDIENTS = {
@@ -85,13 +89,13 @@ def load_data():
             for keyword in NON_VEG_KEYWORDS:
                 if re.search(r'\b' + re.escape(keyword) + r'\b', ingredients) or \
                    re.search(r'\b' + re.escape(keyword) + r'\b', title):
-                    logger.debug(f"Non-veg keyword '{keyword}' found in {row['Title']}")
+                    logger.info(f"Non-veg keyword '{keyword}' found in {row['Title']}")
                     return False
             return row['Is_Vegetarian'] if pd.notna(row['Is_Vegetarian']) else True
         
         df['Is_Vegetarian'] = df.apply(check_non_veg, axis=1)
         
-        logger.debug(f"Dataset loaded and processed in {time.time() - start_time:.2f} seconds")
+        logger.info(f"Dataset loaded and processed in {time.time() - start_time:.2f} seconds")
         return df
     except FileNotFoundError:
         st.error("food_dataset.csv not found. Please ensure the file exists in the correct directory.")
@@ -119,7 +123,7 @@ def vectorize_ingredients(df):
     df["Cleaned_Ingredients"] = df["Ingredients"].apply(clean_text)
     vectorizer = TfidfVectorizer()
     vectors = vectorizer.fit_transform(df["Cleaned_Ingredients"])
-    logger.debug(f"TF-IDF vectorization completed in {time.time() - start_time:.2f} seconds")
+    logger.info(f"TF-IDF vectorization completed in {time.time() - start_time:.2f} seconds")
     return vectorizer, vectors
 
 # Recommend recipes based on ingredient input
@@ -127,6 +131,29 @@ def recommend_recipes(user_input, vectorizer, vectors, df, top_n=5):
     cleaned_input = clean_text(user_input)
     user_vec = vectorizer.transform([cleaned_input])
     sim_scores = cosine_similarity(user_vec, vectors).flatten()
+    top_indices = np.argsort(sim_scores)[::-1][:top_n]
+    return df.iloc[top_indices], sim_scores[top_indices]
+
+# Personalized recipe recommendation based on user interactions
+def personalized_recommendations(df, vectorizer, vectors, top_n=5):
+    interacted_recipes = list(set(st.session_state.liked_recipes + st.session_state.bookmarks + st.session_state.viewed_recipes))
+    if not interacted_recipes:
+        return pd.DataFrame(), np.array([])
+    
+    # Get indices of interacted recipes
+    interacted_indices = df[df['Title'].isin(interacted_recipes)].index
+    if len(interacted_indices) == 0:
+        return pd.DataFrame(), np.array([])
+    
+    # Compute average TF-IDF vector for interacted recipes
+    interacted_vectors = vectors[interacted_indices]
+    avg_vector = np.asarray(np.mean(interacted_vectors, axis=0))  # Convert to NumPy array
+    
+    # Compute similarity with all recipes
+    sim_scores = cosine_similarity(avg_vector.reshape(1, -1), vectors).flatten()
+    
+    # Exclude already interacted recipes
+    sim_scores[interacted_indices] = -1  # Set to negative to exclude
     top_indices = np.argsort(sim_scores)[::-1][:top_n]
     return df.iloc[top_indices], sim_scores[top_indices]
 
@@ -163,6 +190,8 @@ st.markdown("""
     .bookmark-btn:hover {background-color: #0056b3;}
     .use-recipe-btn {background-color: #28a745; color: white; border: none; padding: 8px 16px; border-radius: 8px; cursor: pointer;}
     .use-recipe-btn:hover {background-color: #218838;}
+    .like-btn {background-color: #ff6f61; color: white; border: none; padding: 8px 16px; border-radius: 8px; cursor: pointer;}
+    .like-btn:hover {background-color: #e65b50;}
     .back-btn {background-color: #6c757d; color: white; border: none; padding: 8px 16px; border-radius: 8px; cursor: pointer;}
     .back-btn:hover {background-color: #5a6268;}
     .nutrition-info {font-size: 14px; color: #555;}
@@ -177,15 +206,12 @@ st.markdown("""
 # Sidebar for navigation and filters
 with st.sidebar:
     st.markdown("### Navigation")
-    page = st.radio("Go to", ["Recipe Search", "My Bookmarks", "Search History"])
+    page = st.radio("Go to", ["Recipe Search", "Personalized Recommendations", "My Bookmarks", "Search History"])
 
     if page == "Recipe Search":
         st.markdown("### Filters")
         show_veg = st.checkbox("Vegetarian Only", value=True)
         show_non_veg = st.checkbox("Non-Vegetarian Only", value=True)
-
-# Debug mode toggle
-debug_mode = st.sidebar.checkbox("Enable Debug Mode", value=False)
 
 # Main content
 if page == "Recipe Search":
@@ -232,7 +258,7 @@ if page == "Recipe Search":
         
         start_time = time.time()
         df = load_data()
-        logger.debug(f"Data loaded for search in {time.time() - start_time:.2f} seconds")
+        logger.info(f"Data loaded for search in {time.time() - start_time:.2f} seconds")
         if df.empty:
             st.warning("No data available to display recipes.")
         else:
@@ -275,17 +301,16 @@ if page == "Recipe Search":
             st.markdown(f"<div class='nutrition-info'>**Calories**: {row['Calories']} | **Protein**: {row['Protein']}</div>", unsafe_allow_html=True)
             if 'Instructions' in row:
                 st.markdown(f"**Instructions**: {row['Instructions']}")
-            if st.button("Back to Results", key=f"back_{row['Title']}", help="Return to search results"):
-                st.session_state.selected_recipe = None
-                st.rerun()
-            if debug_mode:
-                st.write(f"Image Path for {row['Title']}: Food Images/{image_name}.jpg")
-                st.write(f"Is_Vegetarian: {row['Is_Vegetarian']}")
-                ingredients = str(row['Ingredients']).lower()
-                title = str(row['Title']).lower()
-                triggered_keywords = [kw for kw in NON_VEG_KEYWORDS if re.search(r'\b' + re.escape(kw) + r'\b', ingredients) or re.search(r'\b' + re.escape(kw) + r'\b', title)]
-                if triggered_keywords:
-                    st.write(f"Non-veg keywords found: {', '.join(triggered_keywords)}")
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("Back to Results", key=f"back_{row['Title']}", help="Return to search results"):
+                    st.session_state.selected_recipe = None
+                    st.rerun()
+            with col2:
+                if st.button("Like", key=f"like_detail_{row['Title']}", help=f"Like {row['Title']}"):
+                    if row['Title'] not in st.session_state.liked_recipes:
+                        st.session_state.liked_recipes.append(row['Title'])
+                        st.success(f"Liked {row['Title']}!")
             st.markdown("</div>", unsafe_allow_html=True)
     
     # Display recommended recipes
@@ -306,9 +331,10 @@ if page == "Recipe Search":
                 else:
                     st.warning(f"Image not found for {row['Title']}")
                 
-                col1, col2 = st.columns(2)
+                col1, col2, col3 = st.columns(3)
                 with col1:
                     if st.button("Use Recipe", key=f"use_{index}", help=f"View details for {row['Title']}"):
+                        st.session_state.viewed_recipes.append(row['Title'])
                         st.session_state.selected_recipe = row
                         st.rerun()
                 with col2:
@@ -316,10 +342,64 @@ if page == "Recipe Search":
                         if row['Title'] not in st.session_state.bookmarks:
                             st.session_state.bookmarks.append(row['Title'])
                             st.success(f"Added {row['Title']} to bookmarks!")
-                if debug_mode:
-                    st.write(f"Image Path for {row['Title']}: Food Images/{image_name}.jpg")
+                with col3:
+                    if st.button("Like", key=f"like_{index}", help=f"Like {row['Title']}"):
+                        if row['Title'] not in st.session_state.liked_recipes:
+                            st.session_state.liked_recipes.append(row['Title'])
+                            st.success(f"Liked {row['Title']}!")
                 st.markdown("</div>", unsafe_allow_html=True)
                 st.markdown("---")
+
+# Personalized Recommendations page
+elif page == "Personalized Recommendations":
+    st.title("🌟 Personalized Recommendations")
+    st.markdown("Recipes tailored to your interests based on your likes, bookmarks, and views.")
+    
+    if st.session_state.liked_recipes or st.session_state.bookmarks or st.session_state.viewed_recipes:
+        df = load_data()
+        if not df.empty:
+            vectorizer, vectors = vectorize_ingredients(df)
+            personalized_results, personalized_scores = personalized_recommendations(df, vectorizer, vectors)
+            if not personalized_results.empty:
+                for i, (index, row) in enumerate(personalized_results.iterrows()):
+                    with st.container():
+                        st.markdown(f"<div class='recipe-card'>", unsafe_allow_html=True)
+                        badge_class = "veg-badge" if row['Is_Vegetarian'] else "non-veg-badge"
+                        badge_text = "Vegetarian" if row['Is_Vegetarian'] else "Non-Vegetarian"
+                        st.markdown(f"**{i+1}. {row['Title']}** <span class='{badge_class}'>{badge_text}</span>", unsafe_allow_html=True)
+                        
+                        # Load and display image
+                        image_name = row['Image_Name']
+                        image = load_recipe_image(image_name)
+                        if image:
+                            st.image(image, caption=row['Title'], width=300, use_container_width=False, output_format="JPEG", clamp=True)
+                        else:
+                            st.warning(f"Image not found for {row['Title']}")
+                        
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            if st.button("Use Recipe", key=f"use_personalized_{index}", help=f"View details for {row['Title']}"):
+                                st.session_state.viewed_recipes.append(row['Title'])
+                                st.session_state.selected_recipe = row
+                                st.rerun()
+                        with col2:
+                            if st.button("Bookmark", key=f"bookmark_personalized_{index}", help=f"Bookmark {row['Title']}"):
+                                if row['Title'] not in st.session_state.bookmarks:
+                                    st.session_state.bookmarks.append(row['Title'])
+                                    st.success(f"Added {row['Title']} to bookmarks!")
+                        with col3:
+                            if st.button("Like", key=f"like_personalized_{index}", help=f"Like {row['Title']}"):
+                                if row['Title'] not in st.session_state.liked_recipes:
+                                    st.session_state.liked_recipes.append(row['Title'])
+                                    st.success(f"Liked {row['Title']}!")
+                        st.markdown("</div>", unsafe_allow_html=True)
+                        st.markdown("---")
+            else:
+                st.write("No personalized recommendations available. Try liking, bookmarking, or viewing some recipes!")
+        else:
+            st.warning("No data available to generate recommendations.")
+    else:
+        st.write("No interactions yet. Like, bookmark, or view some recipes to get personalized suggestions!")
 
 # Bookmarks page
 elif page == "My Bookmarks":
@@ -342,10 +422,17 @@ elif page == "My Bookmarks":
                         st.image(image, caption=bookmark, width=300, use_container_width=False, output_format="JPEG", clamp=True)
                     else:
                         st.warning(f"Image not found for {bookmark}")
-                    if st.button(f"Remove {bookmark}", key=f"remove_{bookmark}"):
-                        st.session_state.bookmarks.remove(bookmark)
-                        st.success(f"Removed {bookmark} from bookmarks!")
-                        st.rerun()
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button(f"Remove {bookmark}", key=f"remove_{bookmark}"):
+                            st.session_state.bookmarks.remove(bookmark)
+                            st.success(f"Removed {bookmark} from bookmarks!")
+                            st.rerun()
+                    with col2:
+                        if st.button("Like", key=f"like_bookmark_{bookmark}", help=f"Like {bookmark}"):
+                            if bookmark not in st.session_state.liked_recipes:
+                                st.session_state.liked_recipes.append(bookmark)
+                                st.success(f"Liked {bookmark}!")
                     st.markdown("</div>", unsafe_allow_html=True)
                     st.markdown("---")
             else:

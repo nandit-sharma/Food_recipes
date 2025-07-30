@@ -157,13 +157,6 @@ def personalized_recommendations(df, vectorizer, vectors, top_n=5):
     top_indices = np.argsort(sim_scores)[::-1][:top_n]
     return df.iloc[top_indices], sim_scores[top_indices]
 
-# Simulate image-to-ingredient matching
-def image_to_ingredients(image_file):
-    filename = image_file.name.lower()
-    ingredients = re.sub(r'[^\w\s]', ' ', filename).split()
-    ingredients = [ing for ing in ingredients if ing not in MINOR_INGREDIENTS and ing not in stop_words]
-    return ', '.join(ingredients) if ingredients else ""
-
 # Load image from Food Images directory
 def load_recipe_image(image_name):
     try:
@@ -216,7 +209,7 @@ with st.sidebar:
 # Main content
 if page == "Recipe Search":
     st.title("🍽️ Recipe Recommender")
-    st.markdown("Discover delicious recipes based on ingredients or images!")
+    st.markdown("Discover delicious recipes based on ingredients!")
 
     # Input section
     with st.container():
@@ -227,34 +220,12 @@ if page == "Recipe Search":
             help="Type the ingredients you have, separated by commas."
         )
         
-        st.markdown("### Upload Ingredient Images")
-        uploaded_images = st.file_uploader(
-            "Upload images of ingredients (e.g., tomato.jpg):",
-            type=['jpg', 'jpeg', 'png'],
-            accept_multiple_files=True,
-            help="Upload images to detect ingredients (based on filename)."
-        )
-
-        # Process uploaded images
-        image_ingredients = []
-        if uploaded_images:
-            for img_file in uploaded_images:
-                ingredients = image_to_ingredients(img_file)
-                if ingredients:
-                    image_ingredients.append(ingredients)
-            if image_ingredients:
-                st.write("Detected ingredients from images:", ', '.join(image_ingredients))
-        
-        # Combine text and image inputs
-        all_ingredients = [user_input] + image_ingredients
-        combined_input = ', '.join([ing for ing in all_ingredients if ing]).strip()
-        
         find_button = st.button("Find Recipes", key="find_recipes", help="Click to find recipes based on your inputs")
 
     # Store search in history
-    if combined_input and find_button:
-        if combined_input not in st.session_state.search_history:
-            st.session_state.search_history.append(combined_input)
+    if user_input and find_button:
+        if user_input not in st.session_state.search_history:
+            st.session_state.search_history.append(user_input)
         
         start_time = time.time()
         df = load_data()
@@ -272,7 +243,7 @@ if page == "Recipe Search":
 
             if not df.empty:
                 vectorizer, vectors = vectorize_ingredients(df)
-                results, scores = recommend_recipes(combined_input, vectorizer, vectors, df)
+                results, scores = recommend_recipes(user_input, vectorizer, vectors, df)
                 st.session_state.search_results = results
                 st.session_state.search_scores = scores
             else:

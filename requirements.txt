@@ -1,7 +1,4 @@
-tensorflow==2.12.0
-streamlit>=1.18.0
+streamlit
 pandas
-numpy
 scikit-learn
 nltk
-Pillow
